@@ -8,11 +8,9 @@ class CaptioningRNN(object):
   """
   A CaptioningRNN produces captions from image features using a recurrent
   neural network.
-
   The RNN receives input vectors of size D, has a vocab size of V, works on
   sequences of length T, has an RNN hidden dimension of H, uses word vectors
   of dimension W, and operates on minibatches of size N.
-
   Note that we don't use any regularization for the CaptioningRNN.
   """
   
@@ -20,7 +18,6 @@ class CaptioningRNN(object):
                hidden_dim=128, cell_type='rnn', dtype=np.float32):
     """
     Construct a new CaptioningRNN instance.
-
     Inputs:
     - word_to_idx: A dictionary giving the vocabulary. It contains V entries,
       and maps each string to a unique integer in the range [0, V).
@@ -135,7 +132,35 @@ class CaptioningRNN(object):
     # defined above to store loss and gradients; grads[k] should give the      #
     # gradients for self.params[k].                                            #
     ############################################################################
-    pass
+    #(1)
+    affine_out, affine_cache = affine_forward(features ,W_proj, b_proj)
+    #(2)
+    word_embedding_out, word_embedding_cache = word_embedding_forward(captions_in, W_embed)
+    #(3)
+    if self.cell_type == 'rnn':
+        rnn_or_lstm_out, rnn_cache = rnn_forward(word_embedding_out, affine_out, Wx, Wh, b)
+    elif self.cell_type == 'lstm':
+        rnn_or_lstm_out, lstm_cache = lstm_forward(word_embedding_out, affine_out, Wx, Wh, b)
+    else:
+        raise ValueError('Invalid cell_type "%s"' % self.cell_type)
+    #(4)
+    temporal_affine_out, temporal_affine_cache = temporal_affine_forward(rnn_or_lstm_out, W_vocab, b_vocab)
+    #(5)
+    loss, dtemporal_affine_out = temporal_softmax_loss(temporal_affine_out, captions_out, mask)
+    #(4)
+    drnn_or_lstm_out, grads['W_vocab'], grads['b_vocab'] = temporal_affine_backward(dtemporal_affine_out, temporal_affine_cache)
+    #(3)
+    if self.cell_type == 'rnn':
+        dword_embedding_out, daffine_out, grads['Wx'], grads['Wh'], grads['b'] = rnn_backward(drnn_or_lstm_out, rnn_cache)
+    elif self.cell_type == 'lstm':
+        dword_embedding_out, daffine_out, grads['Wx'], grads['Wh'], grads['b'] = lstm_backward(drnn_or_lstm_out, lstm_cache)
+    else:
+        raise ValueError('Invalid cell_type "%s"' % self.cell_type)
+    #(2)
+    grads['W_embed'] = word_embedding_backward(dword_embedding_out, word_embedding_cache)
+    #(1)
+    dfeatures, grads['W_proj'], grads['b_proj'] = affine_backward(daffine_out, affine_cache)
+    #pass
     ############################################################################
     #                             END OF YOUR CODE                             #
     ############################################################################
@@ -147,21 +172,17 @@ class CaptioningRNN(object):
     """
     Run a test-time forward pass for the model, sampling captions for input
     feature vectors.
-
     At each timestep, we embed the current word, pass it and the previous hidden
     state to the RNN to get the next hidden state, use the hidden state to get
     scores for all vocab words, and choose the word with the highest score as
     the next word. The initial hidden state is computed by applying an affine
     transform to the input image features, and the initial word is the <START>
     token.
-
     For LSTMs you will also have to keep track of the cell state; in that case
     the initial cell state should be zero.
-
     Inputs:
     - features: Array of input image features of shape (N, D).
     - max_length: Maximum length T of generated captions.
-
     Returns:
     - captions: Array of shape (N, max_length) giving sampled captions,
       where each element is an integer in the range [0, V). The first element
@@ -197,7 +218,27 @@ class CaptioningRNN(object):
     # functions; you'll need to call rnn_step_forward or lstm_step_forward in #
     # a loop.                                                                 #
     ###########################################################################
-    pass
+    N, D = features.shape
+    affine_out, affine_cache = affine_forward(features ,W_proj, b_proj)
+    
+    prev_word_idx = [self._start]*N
+    prev_h = affine_out
+    prev_c = np.zeros(prev_h.shape)
+    captions[:,0] = self._start
+    for i in range(1,max_length):
+        prev_word_embed  = W_embed[prev_word_idx]
+        if self.cell_type == 'rnn':
+            next_h, rnn_step_cache = rnn_step_forward(prev_word_embed, prev_h, Wx, Wh, b)
+        elif self.cell_type == 'lstm':
+            next_h, next_c,lstm_step_cache = lstm_step_forward(prev_word_embed, prev_h, prev_c, Wx, Wh, b)
+            prev_c = next_c
+        else:
+            raise ValueError('Invalid cell_type "%s"' % self.cell_type)
+        vocab_affine_out, vocab_affine_out_cache = affine_forward(next_h, W_vocab, b_vocab)
+        captions[:,i] = list(np.argmax(vocab_affine_out, axis = 1))
+        prev_word_idx = captions[:,i]
+        prev_h = next_h
+    #pass
     ############################################################################
     #                             END OF YOUR CODE                             #
     ############################################################################
